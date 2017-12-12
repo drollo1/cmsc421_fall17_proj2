@@ -90,7 +90,7 @@ static ssize_t mm_read(struct file *filp, char __user * ubuf, size_t count,
 	    (count >
 	     (sizeof(game_status) - *ppos)) ? (sizeof(game_status) -
 					       *ppos) : count;
-	retval = copy_to_user(ubuf, game_status, count);
+	retval = copy_to_user(ubuf, game_status+*ppos, count);
 	if (retval < 0){
 		spin_unlock(&lock);
 		return -EINVAL;
@@ -169,9 +169,15 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 	    scnprintf(user_view + uv_pos, PAGE_SIZE - uv_pos, "%c%c%c%c%i%i",
 		      kernel_buff[0], kernel_buff[1], kernel_buff[2],
 		      kernel_buff[3], bl_peg, wh_peg);
-	scnprintf(game_status, sizeof(game_status),
-		  "Guess %u: %i black peg(s), %i white peg(s)\n", num_guesses,
-		  bl_peg, wh_peg);
+	if(bl_peg<NUM_PEGS)
+		scnprintf(game_status, sizeof(game_status),
+		  	"Guess %u: %i black peg(s), %i white peg(s)\n", num_guesses,
+		  	bl_peg, wh_peg);
+	else{
+		scnprintf(game_status, sizeof(game_status), "Correct! Game over\n");
+		game_active = false;
+		uv_pos+=scnprintf(user_view + uv_pos, PAGE_SIZE - uv_pos, "Winner");
+	}
 	/* FIXME */
 	spin_unlock(&lock);
 	return count;
