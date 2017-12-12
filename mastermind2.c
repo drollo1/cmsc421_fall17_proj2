@@ -34,6 +34,7 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include <linux/vmalloc.h>
+#include <linux/spinlock.h>
 
 #include "xt_cs421net.h"
 
@@ -56,6 +57,8 @@ static char game_status[80];
 static char *user_view;
 
 static int uv_pos;
+
+static DEFINE_SPINLOCK(lock);
 
 /* Copy mm_read(), mm_write(), mm_mmap(), and mm_ctl_write(), along
  * with all of your global variables and helper functions here.
@@ -81,15 +84,19 @@ static int uv_pos;
 static ssize_t mm_read(struct file *filp, char __user * ubuf, size_t count,
 		       loff_t * ppos)
 {
+	spin_lock(&lock);
 	int retval;
 	count =
 	    (count >
 	     (sizeof(game_status) - *ppos)) ? (sizeof(game_status) -
 					       *ppos) : count;
 	retval = copy_to_user(ubuf, game_status, count);
-	if (retval < 0)
+	if (retval < 0){
+		spin_unlock(&lock);
 		return -EINVAL;
+	}
 	*ppos += count;
+	spin_unlock(&lock);
 	return count;
 	/* FIXME */
 	return -EPERM;
@@ -118,6 +125,7 @@ static ssize_t mm_read(struct file *filp, char __user * ubuf, size_t count,
 static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 			size_t count, loff_t * ppos)
 {
+	spin_lock(&lock);
 	int retval;
 	int guess[NUM_PEGS];
 	int checked[NUM_PEGS];
@@ -165,6 +173,7 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 		  "Guess %u: %i black peg(s), %i white peg(s)\n", num_guesses,
 		  bl_peg, wh_peg);
 	/* FIXME */
+	spin_unlock(&lock);
 	return count;
 }
 
@@ -185,15 +194,18 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
  */
 static int mm_mmap(struct file *filp, struct vm_area_struct *vma)
 {
+	spin_lock(&lock);
 	unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
 	unsigned long page = vmalloc_to_pfn(user_view);
 	if (size > PAGE_SIZE)
 		return -EIO;
 	vma->vm_pgoff = 0;
 	vma->vm_page_prot = PAGE_READONLY;
-	if (remap_pfn_range(vma, vma->vm_start, page, size, vma->vm_page_prot))
+	if (remap_pfn_range(vma, vma->vm_start, page, size, vma->vm_page_prot)){
+		spin_unlock(&lock);
 		return -EAGAIN;
-
+	}
+	spin_unlock(&lock);
 	return 0;
 }
 
@@ -222,6 +234,7 @@ static int mm_mmap(struct file *filp, struct vm_area_struct *vma)
 static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 			    size_t count, loff_t * ppos)
 {
+	spin_lock(&lock);
 	int retval;
 	char kernel_buff[80];
 	int i;
@@ -250,8 +263,11 @@ static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 			  "Game over. The code was     .\n");
 		for (i = 0; i < 4; i++)
 			game_status[24 + i] = (char)(target_code[i] + '0');
-	} else
+	} else{
+		spin_unlock(&lock);
 		return -EPERM;
+	}
+	spin_unlock(&lock);
 	/* FIXME */
 	return count;
 	/* FIXME */
@@ -369,6 +385,7 @@ static int mastermind_probe(struct platform_device *pdev)
 	/* Copy the contents of your original mastermind_init() here. */
 	/* YOUR CODE HERE */
 	int j, retval;
+	
 	pr_info("Initializing the game.\n");
 	user_view = vmalloc(PAGE_SIZE);
 	if (!user_view) {
@@ -387,6 +404,7 @@ static int mastermind_probe(struct platform_device *pdev)
 	scnprintf(game_status, sizeof(game_status), "No game yet\n");
 
 	game_active = false;
+
 	/*
 	 * You will need to integrate the following resource allocator
 	 * into your code. That also means properly releasing the
@@ -420,6 +438,7 @@ static int mastermind_remove(struct platform_device *pdev)
 	/* Copy the contents of your original mastermind_exit() here. */
 	/* YOUR CODE HERE */
 	pr_info("Freeing resources.\n");
+	
 	misc_deregister(&mm_dev);
 	misc_deregister(&mm_ctl_dev);
 	vfree(user_view);
