@@ -39,7 +39,8 @@
 #include "xt_cs421net.h"
 
 #define NUM_PEGS 4
-#define NUM_COLORS 6
+static int NUM_COLORS = 6;
+static int num_games = 0;
 
 /** true if user is in the middle of a game */
 static bool game_active;
@@ -131,16 +132,22 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 	int checked[NUM_PEGS];
 	int i, j, bl_peg, wh_peg;
 	char kernel_buff[80];
-	if (!game_active)
+	if (!game_active){
+		spin_unlock(&lock);
 		return -EPERM;
+	}
 	retval = copy_from_user(kernel_buff, ubuf, count);
-	if (retval < 0)
+	if (retval < 0){
+		spin_unlock(&lock);
 		return -EINVAL;
+	}
 	for (i = 0; i < NUM_PEGS; i++)
-		if (kernel_buff[i] >= '0' && kernel_buff[i] <= '5')
+		if (kernel_buff[i] >= '0' && kernel_buff[i] < (NUM_COLORS+48))
 			guess[i] = (kernel_buff[i] - '0');
-		else
+		else{
+			spin_unlock(&lock);
 			return -EPERM;
+		}
 	for (i = 0; i < NUM_PEGS; i++)
 		checked[i] = -1;
 
@@ -203,8 +210,10 @@ static int mm_mmap(struct file *filp, struct vm_area_struct *vma)
 	spin_lock(&lock);
 	unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
 	unsigned long page = vmalloc_to_pfn(user_view);
-	if (size > PAGE_SIZE)
+	if (size > PAGE_SIZE){
+		spin_unlock(&lock);
 		return -EIO;
+	}
 	vma->vm_pgoff = 0;
 	vma->vm_page_prot = PAGE_READONLY;
 	if (remap_pfn_range(vma, vma->vm_start, page, size, vma->vm_page_prot)){
@@ -253,6 +262,7 @@ static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 		target_code[2] = 1;
 		target_code[3] = 2;
 		num_guesses = 0;
+		num_games++;
 		uv_pos = 0;
 		for (i = 0; i < PAGE_SIZE; i++)
 			user_view[i] = '\0';
@@ -263,13 +273,26 @@ static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 	} else if (count == 4 && kernel_buff[0] == 'q' && kernel_buff[1] == 'u'
 		   && kernel_buff[2] == 'i' && kernel_buff[3] == 't') {
 		game_active = false;
+		num_games--;
 		for (i = 0; i < sizeof(game_status); i++)
 			game_status[i] = '\0';
 		scnprintf(game_status, sizeof(game_status),
 			  "Game over. The code was     .\n");
 		for (i = 0; i < 4; i++)
 			game_status[24 + i] = (char)(target_code[i] + '0');
-	} else{
+	} else if ((kernel_buff[0]=='c')&&(kernel_buff[1]=='o')&&(kernel_buff[2]=='l')&&(kernel_buff[3]=='o')&&(kernel_buff[4]=='r')&&(kernel_buff[5]=='s')){
+		if(!capable(CAP_SYS_ADMIN)){
+			spin_unlock(&lock);
+			return -EACCES;	
+		}
+		else if((kernel_buff[7]< '2')||(kernel_buff[8]>='0')||(kernel_buff[7]> '9')){
+			spin_unlock(&lock);
+			return -EINVAL;
+		}
+		else
+			NUM_COLORS=kernel_buff[7]-'0';	
+	}
+	else{
 		spin_unlock(&lock);
 		return -EPERM;
 	}
@@ -303,6 +326,7 @@ static struct miscdevice mm_dev = {
 	.fops = &mm_fops,
 	.mode = 0666,
 };
+
 
 /**
  * cs421net_top() - top-half of CS421Net ISR
@@ -374,9 +398,29 @@ static irqreturn_t cs421net_bottom(int irq, void *cookie)
 static ssize_t mm_stats_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
-	/* Part 3: YOUR CODE HERE */
+	spin_lock(&lock);
+	int retval;
+	char stats[PAGE_SIZE];
+	retval=scnprintf(buf, sizeof("CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n"), "CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n", NUM_PEGS, NUM_COLORS, num_games);
+	if (retval < 0){
+		spin_unlock(&lock);
+		return -EINVAL;
+	}
+	spin_unlock(&lock);
+	return sizeof(stats);
 	return -EPERM;
 }
+
+/*static const struct file_operations mm_stat_show_fops = {
+	.read = mm_stats_show,
+};
+
+static struct miscdevice mm_stat_show_dev = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "stats",
+	.fops = &mm_stat_show_fops,
+	.mode = 0666,
+};*/
 
 static DEVICE_ATTR(stats, S_IRUGO, mm_stats_show, NULL);
 

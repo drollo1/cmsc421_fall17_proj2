@@ -26,3 +26,5 @@ clean:
 load:
 	sudo insmod mastermind2.ko
 
+run:
+	./mastermind2-test
