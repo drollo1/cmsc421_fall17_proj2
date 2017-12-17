@@ -273,7 +273,6 @@ static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 	} else if (count == 4 && kernel_buff[0] == 'q' && kernel_buff[1] == 'u'
 		   && kernel_buff[2] == 'i' && kernel_buff[3] == 't') {
 		game_active = false;
-		num_games--;
 		for (i = 0; i < sizeof(game_status); i++)
 			game_status[i] = '\0';
 		scnprintf(game_status, sizeof(game_status),
@@ -411,18 +410,14 @@ static ssize_t mm_stats_show(struct device *dev,
 	return -EPERM;
 }
 
-/*static const struct file_operations mm_stat_show_fops = {
-	.read = mm_stats_show,
-};
-
-static struct miscdevice mm_stat_show_dev = {
-	.minor = MISC_DYNAMIC_MINOR,
-	.name = "stats",
-	.fops = &mm_stat_show_fops,
-	.mode = 0666,
-};*/
-
 static DEVICE_ATTR(stats, S_IRUGO, mm_stats_show, NULL);
+
+static irqreturn_t irq_master(int irq, void *dev){
+	disable_irq_nosync(irq);
+	schedule_delayed_work(&work, HZ/20);
+
+	return IRQ_HANDLED;
+}
 
 /**
  * mastermind_probe() - callback invoked when this driver is probed
@@ -455,6 +450,12 @@ static int mastermind_probe(struct platform_device *pdev)
 
 	game_active = false;
 
+	err=request_threaded_irq(CS421NET_IRQ, irq_master, 0, MODNAME, NULL);
+	if(err){
+		/*b43err(dev->wl, "Cannot request IRQ-%d\n", dev->dev->irq); */
+		goto EXIT;
+	}
+
 	/*
 	 * You will need to integrate the following resource allocator
 	 * into your code. That also means properly releasing the
@@ -474,6 +475,7 @@ static int mastermind_probe(struct platform_device *pdev)
 	DEV_ERROR:
 		pr_err("Could not connect to devices");
 		vfree(user_view);
+	EXIT:
 		return -ENODEV;
 }
 
@@ -487,6 +489,9 @@ static int mastermind_remove(struct platform_device *pdev)
 {
 	/* Copy the contents of your original mastermind_exit() here. */
 	/* YOUR CODE HERE */
+	free_irq(CS421NET_IRQ, NULL);
+	cancel_delayed_work_sync(&work);
+	input_unregister_device(CS421NET_IRQ);
 	pr_info("Freeing resources.\n");
 	
 	misc_deregister(&mm_dev);
