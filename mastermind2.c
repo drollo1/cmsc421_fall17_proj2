@@ -1,5 +1,12 @@
-/* YOUR FILE-HEADER COMMENT HERE */
+/***********************************************************
+  File Name: mastermind.c
+  Author Name: Dominic Rollo
+  Assignment: project 2
 
+  Description: Kernel panicks every time i try calling
+  	cs421net_get_data().  I can't figure out why. Only 
+  	completed parts 1-3.
+***********************************************************/
 /*
  * This file uses kernel-doc style comments, which is similar to
  * Javadoc and Doxygen-style comments.  See
@@ -35,6 +42,7 @@
 #include <linux/uidgid.h>
 #include <linux/vmalloc.h>
 #include <linux/spinlock.h>
+#include <linux/workqueue.h>
 
 #include "xt_cs421net.h"
 
@@ -91,8 +99,8 @@ static ssize_t mm_read(struct file *filp, char __user * ubuf, size_t count,
 	    (count >
 	     (sizeof(game_status) - *ppos)) ? (sizeof(game_status) -
 					       *ppos) : count;
-	retval = copy_to_user(ubuf, game_status+*ppos, count);
-	if (retval < 0){
+	retval = copy_to_user(ubuf, game_status + *ppos, count);
+	if (retval < 0) {
 		spin_unlock(&lock);
 		return -EINVAL;
 	}
@@ -132,19 +140,19 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 	int checked[NUM_PEGS];
 	int i, j, bl_peg, wh_peg;
 	char kernel_buff[80];
-	if (!game_active){
+	if (!game_active) {
 		spin_unlock(&lock);
 		return -EPERM;
 	}
 	retval = copy_from_user(kernel_buff, ubuf, count);
-	if (retval < 0){
+	if (retval < 0) {
 		spin_unlock(&lock);
 		return -EINVAL;
 	}
 	for (i = 0; i < NUM_PEGS; i++)
-		if (kernel_buff[i] >= '0' && kernel_buff[i] < (NUM_COLORS+48))
+		if (kernel_buff[i] >= '0' && kernel_buff[i] < (NUM_COLORS + 48))
 			guess[i] = (kernel_buff[i] - '0');
-		else{
+		else {
 			spin_unlock(&lock);
 			return -EPERM;
 		}
@@ -176,14 +184,16 @@ static ssize_t mm_write(struct file *filp, const char __user * ubuf,
 	    scnprintf(user_view + uv_pos, PAGE_SIZE - uv_pos, "%c%c%c%c%i%i",
 		      kernel_buff[0], kernel_buff[1], kernel_buff[2],
 		      kernel_buff[3], bl_peg, wh_peg);
-	if(bl_peg<NUM_PEGS)
+	if (bl_peg < NUM_PEGS)
 		scnprintf(game_status, sizeof(game_status),
-		  	"Guess %u: %i black peg(s), %i white peg(s)\n", num_guesses,
-		  	bl_peg, wh_peg);
-	else{
-		scnprintf(game_status, sizeof(game_status), "Correct! Game over\n");
+			  "Guess %u: %i black peg(s), %i white peg(s)\n",
+			  num_guesses, bl_peg, wh_peg);
+	else {
+		scnprintf(game_status, sizeof(game_status),
+			  "Correct! Game over\n");
 		game_active = false;
-		uv_pos+=scnprintf(user_view + uv_pos, PAGE_SIZE - uv_pos, "Winner");
+		uv_pos +=
+		    scnprintf(user_view + uv_pos, PAGE_SIZE - uv_pos, "Winner");
 	}
 	/* FIXME */
 	spin_unlock(&lock);
@@ -210,13 +220,13 @@ static int mm_mmap(struct file *filp, struct vm_area_struct *vma)
 	spin_lock(&lock);
 	unsigned long size = (unsigned long)(vma->vm_end - vma->vm_start);
 	unsigned long page = vmalloc_to_pfn(user_view);
-	if (size > PAGE_SIZE){
+	if (size > PAGE_SIZE) {
 		spin_unlock(&lock);
 		return -EIO;
 	}
 	vma->vm_pgoff = 0;
 	vma->vm_page_prot = PAGE_READONLY;
-	if (remap_pfn_range(vma, vma->vm_start, page, size, vma->vm_page_prot)){
+	if (remap_pfn_range(vma, vma->vm_start, page, size, vma->vm_page_prot)) {
 		spin_unlock(&lock);
 		return -EAGAIN;
 	}
@@ -279,19 +289,19 @@ static ssize_t mm_ctl_write(struct file *filp, const char __user * ubuf,
 			  "Game over. The code was     .\n");
 		for (i = 0; i < 4; i++)
 			game_status[24 + i] = (char)(target_code[i] + '0');
-	} else if ((kernel_buff[0]=='c')&&(kernel_buff[1]=='o')&&(kernel_buff[2]=='l')&&(kernel_buff[3]=='o')&&(kernel_buff[4]=='r')&&(kernel_buff[5]=='s')){
-		if(!capable(CAP_SYS_ADMIN)){
+	} else if ((kernel_buff[0] == 'c') && (kernel_buff[1] == 'o')
+		   && (kernel_buff[2] == 'l') && (kernel_buff[3] == 'o')
+		   && (kernel_buff[4] == 'r') && (kernel_buff[5] == 's')) {
+		if (!capable(CAP_SYS_ADMIN)) {
 			spin_unlock(&lock);
-			return -EACCES;	
-		}
-		else if((kernel_buff[7]< '2')||(kernel_buff[8]>='0')||(kernel_buff[7]> '9')){
+			return -EACCES;
+		} else if ((kernel_buff[7] < '2') || (kernel_buff[8] >= '0')
+			   || (kernel_buff[7] > '9')) {
 			spin_unlock(&lock);
 			return -EINVAL;
-		}
-		else
-			NUM_COLORS=kernel_buff[7]-'0';	
-	}
-	else{
+		} else
+			NUM_COLORS = kernel_buff[7] - '0';
+	} else {
 		spin_unlock(&lock);
 		return -EPERM;
 	}
@@ -326,7 +336,6 @@ static struct miscdevice mm_dev = {
 	.mode = 0666,
 };
 
-
 /**
  * cs421net_top() - top-half of CS421Net ISR
  * @irq: IRQ that was invoked (ignored)
@@ -338,6 +347,10 @@ static struct miscdevice mm_dev = {
  */
 static irqreturn_t cs421net_top(int irq, void *cookie)
 {
+	if (irq == CS421NET_IRQ) {
+		return IRQ_WAKE_THREAD;
+	} else
+		return IRQ_NONE;
 	/* Part 4: YOUR CODE HERE */
 	return 0;
 }
@@ -370,7 +383,25 @@ static irqreturn_t cs421net_top(int irq, void *cookie)
  */
 static irqreturn_t cs421net_bottom(int irq, void *cookie)
 {
-	/* Part 4: YOUR CODE HERE */
+	const char *packet;
+	int i;
+	size_t *pak_len;
+	unsigned long flag;
+	pr_info
+	    ("Started at the bottom and now're here<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+	/*spin_lock_irqsave(&lock,flag);
+	   /*packet=cs421net_get_data(pak_len);
+	   /*if(NUM_PEGS==*pak_len){
+	   pr_info("Right length <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
+	   for(i=0; i<NUM_PEGS; i++)
+	   if(*(packet+i)<'0'&& *(packet+i)>(NUM_COLORS+'0'))
+	   goto RTRN;
+	   target_code[i]=*(packet+i)-'0';
+	   }/*
+
+	   /* Part 4: YOUR CODE HERE */
+	//spin_unlock_irqrestore(&lock,flag);
+RTRN:
 	return IRQ_HANDLED;
 }
 
@@ -400,8 +431,13 @@ static ssize_t mm_stats_show(struct device *dev,
 	spin_lock(&lock);
 	int retval;
 	char stats[PAGE_SIZE];
-	retval=scnprintf(buf, sizeof("CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n"), "CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n", NUM_PEGS, NUM_COLORS, num_games);
-	if (retval < 0){
+	retval =
+	    scnprintf(buf,
+		      sizeof
+		      ("CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n****Winning code: %c\n"),
+		      "CS421 Mastermind Stats\nNumber of pegs: %i\nNumber of colors: %i\nNumber of games started: %i\n",
+		      NUM_PEGS, NUM_COLORS, num_games);
+	if (retval < 0) {
 		spin_unlock(&lock);
 		return -EINVAL;
 	}
@@ -411,13 +447,6 @@ static ssize_t mm_stats_show(struct device *dev,
 }
 
 static DEVICE_ATTR(stats, S_IRUGO, mm_stats_show, NULL);
-
-static irqreturn_t irq_master(int irq, void *dev){
-	disable_irq_nosync(irq);
-	schedule_delayed_work(&work, HZ/20);
-
-	return IRQ_HANDLED;
-}
 
 /**
  * mastermind_probe() - callback invoked when this driver is probed
@@ -430,7 +459,7 @@ static int mastermind_probe(struct platform_device *pdev)
 	/* Copy the contents of your original mastermind_init() here. */
 	/* YOUR CODE HERE */
 	int j, retval;
-	
+
 	pr_info("Initializing the game.\n");
 	user_view = vmalloc(PAGE_SIZE);
 	if (!user_view) {
@@ -450,11 +479,14 @@ static int mastermind_probe(struct platform_device *pdev)
 
 	game_active = false;
 
-	err=request_threaded_irq(CS421NET_IRQ, irq_master, 0, MODNAME, NULL);
-	if(err){
-		/*b43err(dev->wl, "Cannot request IRQ-%d\n", dev->dev->irq); */
-		goto EXIT;
+	int err =
+	    request_threaded_irq(CS421NET_IRQ, cs421net_top, cs421net_bottom, 0,
+				 KBUILD_MODNAME, NULL);
+	if (err) {
+		printk(KERN_ERR "Can't allocate irq %d\n", CS421NET_IRQ);
+		return -EBUSY;
 	}
+	cs421net_enable();
 
 	/*
 	 * You will need to integrate the following resource allocator
@@ -470,13 +502,12 @@ static int mastermind_probe(struct platform_device *pdev)
 		vfree(user_view);
 	}
 	return retval;
-	CTL_DEV_ERROR:
-		misc_deregister(&mm_dev);
-	DEV_ERROR:
-		pr_err("Could not connect to devices");
-		vfree(user_view);
-	EXIT:
-		return -ENODEV;
+CTL_DEV_ERROR:
+	misc_deregister(&mm_dev);
+DEV_ERROR:
+	pr_err("Could not connect to devices");
+	vfree(user_view);
+	return -ENODEV;
 }
 
 /**
@@ -489,15 +520,19 @@ static int mastermind_remove(struct platform_device *pdev)
 {
 	/* Copy the contents of your original mastermind_exit() here. */
 	/* YOUR CODE HERE */
-	free_irq(CS421NET_IRQ, NULL);
-	cancel_delayed_work_sync(&work);
-	input_unregister_device(CS421NET_IRQ);
+	/*free_irq(CS421NET_IRQ, NULL);
+	   cancel_delayed_work_sync(&work);
+	   input_unregister_device(CS421NET_IRQ); */
+	spin_lock(&lock);
 	pr_info("Freeing resources.\n");
-	
+
 	misc_deregister(&mm_dev);
 	misc_deregister(&mm_ctl_dev);
 	vfree(user_view);
 	device_remove_file(&pdev->dev, &dev_attr_stats);
+	free_irq(CS421NET_IRQ, NULL);
+	cs421net_disable();
+	spin_unlock(&lock);
 	return 0;
 }
 
